@@ -22,3 +22,4 @@ Une des principales caractéristiques de l'application est la capacité à gén�
 
 Les résultats sont présentés dans un format facile à comprendre, avec des graphiques qui s'ajustent automatiquement en fonction des filtres appliqués.
 
+Ces données sont issues du crowdsourcing effectué par les contributeurs au projet OpenStreetMap et sont sous licence ODbL et la mention d'attribution obligatoire doit être "© les contributeurs d'OpenStreetMap sous licence ODbL" conformément à http://osm.org/copyright
