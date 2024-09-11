@@ -1,0 +1,436 @@
+---
+title: "finalfinal"
+author: "PIERRE"
+date: "2024-03-19"
+output: html_document
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, error=FALSE}
+library(shiny)
+library(ggplot2)
+library(plotly)
+library(tidyr)
+library(tidyverse)
+library(shinythemes)
+library(leaflet)
+library(dplyr)
+library(ggmap)
+library(jsonlite)
+library(sf)
+```
+
+# récupération des données
+
+```{r}
+donnees <- read.csv("lic-data-2021.csv", stringsAsFactors = FALSE,sep = ";")
+```
+
+# on garde que l'aviron 
+
+```{r}
+donnees_federation_aviron <- donnees %>% filter(Fédération == "FF d'Aviron")
+```
+
+# Charger les données des régions françaises depuis le fichier shapefile
+
+```{r}
+regions_shapefile <- st_read(dsn = "regions-20180101.shp")
+```
+
+# charger les départements
+
+```{r}
+
+contours_departements <- st_read("contour-des-departements.geojson")
+
+```
+
+# on regarde les variables
+
+```{r}
+colnames(donnees_federation_aviron)
+```
+
+# base de données sans les coordonnées GPS donc ce code donne les lon et lat
+
+```{r}
+if (!require(jsonlite)) install.packages("jsonlite")
+
+mygeocode <- function(adresses) {
+  nominatim_osm <- function(address = NULL) {
+    if (suppressWarnings(is.null(address))) return(data.frame())
+    tryCatch({
+      d <- jsonlite::fromJSON(
+        paste0("http://nominatim.openstreetmap.org/search?q=", gsub('\\s+', '\\%20', address),
+               "&format=json&addressdetails=0&limit=1")
+      )
+      if (length(d) == 0) return(data.frame(lon = NA, lat = NA))
+      return(c(as.numeric(d$lon), as.numeric(d$lat)))
+    }, error = function(c) return(data.frame(lon = NA, lat = NA)))
+}
+
+
+  tableau <- t(sapply(adresses, nominatim_osm))
+  colnames(tableau) <- c("lon", "lat")
+  return(tableau)
+}
+
+coordonnees <- mygeocode(donnees_federation_aviron$Commune)
+print(coordonnees)
+
+```
+
+# création d'un dataframe pour pouvoir inclure les lon et lat dans la base de données 
+
+```{r}
+coordonnees_df <- as.data.frame(coordonnees)
+donnees_federation_aviron$Longitude <- coordonnees_df$lon
+donnees_federation_aviron$Latitude <- coordonnees_df$lat
+```
+
+# renommer les colonnes
+
+```{r}
+nouv_noms <- c(
+  "Code_Commune", "Commune", "Code_QPV", "Nom_QPV", "Departement", "Region", 
+  "Statut_geo", "Code", "Federation", "F_1_4_ans", "F_5_9_ans", "F_10_14_ans", 
+  "F_15_19_ans", "F_20_24_ans", "F_25_29_ans", "F_30_34_ans", "F_35_39_ans", 
+  "F_40_44_ans", "F_45_49_ans", "F_50_54_ans", "F_55_59_ans", "F_60_64_ans", 
+  "F_65_69_ans", "F_70_74_ans", "F_75_79_ans", "F_80_99_ans", "F_NR", 
+  "H_1_4_ans", "H_5_9_ans", "H_10_14_ans", "H_15_19_ans", "H_20_24_ans", 
+  "H_25_29_ans", "H_30_34_ans", "H_35_39_ans", "H_40_44_ans", "H_45_49_ans", 
+  "H_50_54_ans", "H_55_59_ans", "H_60_64_ans", "H_65_69_ans", "H_70_74_ans", 
+  "H_75_79_ans", "H_80_99_ans", "H_NR", "NR_NR", "Total", "Longitude", "Latitude"
+)
+
+colnames(donnees_federation_aviron) <- nouv_noms
+
+print(colnames(donnees_federation_aviron))
+
+```
+
+# creation total homme et total femme
+
+```{r}
+donnees_federation_aviron$Total_homme <- rowSums(donnees_federation_aviron[, grep("^H_", colnames(donnees_federation_aviron))], na.rm = TRUE)
+
+donnees_federation_aviron$Total_femme <- rowSums(donnees_federation_aviron[, grep("^F_", colnames(donnees_federation_aviron))], na.rm = TRUE)
+
+```
+
+# application shiny
+
+```{r}
+ui <- fluidPage(theme = shinytheme("superhero"),
+  titlePanel("Application Shiny"),
+  
+  tabsetPanel(
+    tabPanel("Nombre de licenciés d'aviron en France",
+             sidebarLayout(
+               sidebarPanel(
+                 selectInput("Region", "Choisir une région :", choices = unique(donnees_federation_aviron$Region)),
+                 selectInput("Departement", "Choisir un département :", choices = NULL),
+                 selectInput("Commune", "Choisir une commune :", choices = NULL)
+               ,),
+               mainPanel(
+                 tabsetPanel(
+                   tabPanel("Licenciés", 
+                            h4("Nombre de licenciés d'aviron :"),
+                            verbatimTextOutput("licencies_output")
+                   )
+                 )
+               )
+             )),
+    tabPanel("Statistiques descriptives",
+             tabsetPanel(
+               tabPanel("Graphique ",
+                        plotlyOutput("genre_plot")
+               ),
+               tabPanel("Comparaison des licenciés hommes et femmes"  ,titlePanel("Comparaison des licenciés hommes et femmes par région"),
+  sidebarLayout(
+    sidebarPanel(
+      selectInput("region", "Choisir une région :", choices = unique(donnees_federation_aviron$Region))
+    ),
+    mainPanel(
+      plotlyOutput("bar_chart")
+    )
+  )),
+             tabPanel("Licenciés par département",
+                        fluidPage(
+                          titlePanel("Graphique interactif des licenciés par département"),
+                          sliderInput("range", "Sélectionnez une plage de valeurs :", min = 0, max = 3000, value = c(0, 3000), step = 100),
+                          plotlyOutput("licencies_plot")
+                        )
+               ,titlePanel("Graphique interactif des licenciés par région"),
+  sliderInput("range", "Sélectionnez une plage de valeurs :", min = 0, max = 10000, value = c(0, 10000), step = 100),
+  plotlyOutput("licencies_plot1")
+)
+             )
+    ),
+    tabPanel("Cartes des licenciés d'aviron",
+             tabsetPanel(
+               tabPanel("Par Commune", leafletOutput("ma_carte_commune")),
+               tabPanel("Changement de Couleurs", leafletOutput("ma_carte_couleurs")),
+               tabPanel("Par Région", leafletOutput("ma_carte_region")),
+               tabPanel("Par Département", leafletOutput("ma_carte_departement")),
+               tabPanel("Par Région (Cliquer)", leafletOutput("ma_carte_region_click")),
+               tabPanel("Par Région (Cliquer)/L", leafletOutput("ma_carte_region_clickl")),
+               tabPanel("Carte H/F", leafletOutput("ma_carte_region_clickH_F"))
+             )
+    )
+  )
+)
+
+server <- function(input, output, session) {
+  observeEvent(input$Region, {
+    dept_choices <- unique(donnees_federation_aviron$Departement[donnees_federation_aviron$Region == input$Region])
+    updateSelectInput(session, "Departement", choices = dept_choices)
+  })
+  
+  observe({
+    commune_choices <- unique(donnees_federation_aviron$Commune[donnees_federation_aviron$Departement == input$Departement])
+    updateSelectInput(session, "Commune", choices = commune_choices)
+  })
+  
+  output$licencies_output <- renderPrint({
+    if (!is.null(input$Commune)) {
+      licencies <- donnees_federation_aviron$Total[donnees_federation_aviron$Commune == input$Commune]
+      paste("Nombre de licenciés d'aviron à", input$Commune, ":", licencies)
+    } else {
+      "Sélectionnez une commune pour afficher le nombre de licenciés d'aviron."
+    }
+  })
+  filtered_data <- reactive({
+    subset(donnees_federation_aviron, Region == input$region)
+  })
+  
+  output$bar_chart <- renderPlotly({
+
+    region_data <- filtered_data()
+    
+    total_hommes <- sum(region_data$Total_homme, na.rm = TRUE)
+    total_femmes <- sum(region_data$Total_femme, na.rm = TRUE)
+    
+    plot_ly(x = c("Hommes", "Femmes"), 
+            y = c(total_hommes, total_femmes), 
+            type = 'bar', 
+            marker = list(color = c("blue", "pink")),
+            name = 'Licenciés') %>%
+      layout(title = paste("Comparaison des licenciés hommes et femmes dans la région", input$region))
+  })
+  
+  
+  output$genre_plot <- renderPlotly({
+  df_total <- data.frame(
+    Categorie = c("Hommes", "Femmes"),
+    Total = c(sum(donnees_federation_aviron$Total_homme, na.rm = TRUE),
+              sum(donnees_federation_aviron$Total_femme, na.rm = TRUE))
+  )
+  
+  plot_ly(df_total, labels = ~Categorie, values = ~Total, type = "pie") %>%
+    layout(title = "Répartition des licences par genre",
+           showlegend = TRUE,
+           legend = list(title = "Catégorie", font = list(size = 12)),
+           titlefont = list(size = 14, hjust = 0.5))
+})
+
+  output$licencies_plot <- renderPlotly({
+    filtered_data <- donnees_federation_aviron[donnees_federation_aviron$Total >= input$range[1] & donnees_federation_aviron$Total <= input$range[2], ]
+    
+    plot_ly(data = filtered_data, x = ~Departement, y = ~Total, type = 'bar') %>%
+      layout(title = "Répartition des licenciés par département", xaxis = list(title = "Département"), yaxis = list(title = "Nombre de licenciés")) %>%
+      config(scrollZoom = TRUE)
+  })
+  
+  output$licencies_plot1 <- renderPlotly({
+    filtered_data <- aggregated_data[aggregated_data$Total >= input$range[1] & aggregated_data$Total <= input$range[2], ]
+    
+    plot_ly(data = donnees_federation_aviron, x = ~Region, y = ~Total, type = 'bar') %>%
+      layout(title = "Répartition des licenciés par région", xaxis = list(title = "Région"), yaxis = list(title = "Nombre de licenciés"))
+  })
+  
+  donnees_federation_aviron$Longitude <- as.numeric(donnees_federation_aviron$Longitude)
+  donnees_federation_aviron$Latitude <- as.numeric(donnees_federation_aviron$Latitude)
+  
+  donnees_federation_aviron <- donnees_federation_aviron[complete.cases(donnees_federation_aviron$Longitude, donnees_federation_aviron$Latitude), ]
+  
+  #carte par commune
+  output$ma_carte_commune <- renderLeaflet({
+    leaflet() %>%
+      addTiles() %>%
+      setView(lng = 2.2137, lat = 46.2276, zoom = 5) %>%
+      addMarkers(data = donnees_federation_aviron, 
+                 lng = ~Longitude, 
+                 lat = ~Latitude, 
+                 popup = ~paste("Commune : ", Commune, "<br>",
+                                "Nombre de licenciés : ", Total))
+  })
+  
+  #carte pour le changement de couleurs
+  output$ma_carte_couleurs <- renderLeaflet({
+    ma_carte <- leaflet() %>%
+      addTiles() %>%
+      setView(lng = 2.2137, lat = 46.2276, zoom = 5)
+    
+    redIcon <- makeIcon(iconUrl = "http://leafletjs.com/examples/custom-icons/leaf-red.png",
+                        iconWidth = 38, iconHeight = 38)
+    
+    ma_carte <- ma_carte %>% 
+      addMarkers(data = donnees_federation_aviron, 
+                 lng = ~Longitude, 
+                 lat = ~Latitude, 
+                 popup = ~paste("Commune : ", Commune, "<br>",
+                                "Nombre de licenciés : ", Total),
+                 icon = redIcon)
+    ma_carte
+  })
+  
+  # Créer la carte par région
+  output$ma_carte_region <- renderLeaflet({
+    leaflet() %>%
+      addTiles() %>%
+      setView(lng = 2.2137, lat = 46.2276, zoom = 5) %>%
+      addPolygons(data = regions_shapefile,
+                  fillColor = "blue",
+                  weight = 2,
+                  opacity = 1,
+                  color = "white",
+                  dashArray = "3",
+                  fillOpacity = 0.7,
+                  layerId = ~code_insee)
+  })
+  
+  # Créer la carte pour les départements
+  output$ma_carte_departement <- renderLeaflet({
+    leaflet(contours_departements) %>%
+      addTiles() %>%
+      setView(lng = 2.2137, lat = 46.2276, zoom = 5) %>%
+      addPolygons(fillColor = "blue",
+                  weight = 2,
+                  opacity = 0.4,
+                  color = "white",
+                  dashArray = "3",
+                  fillOpacity = 0.7)
+  })
+  
+  # Créer la carte des régions cliquable
+  output$ma_carte_region_click <- renderLeaflet({
+    leaflet() %>%
+      addTiles() %>%
+      setView(lng = 2.2137, lat = 46.2276, zoom = 5) %>%
+      addPolygons(data = regions_shapefile,
+                  fillColor = "blue",
+                  weight = 2,
+                  opacity = 1,
+                  color = "white",
+                  dashArray = "3",
+                  fillOpacity = 0.7,
+                  layerId = ~code_insee)
+  })
+  
+  observeEvent(input$ma_carte_region_click_shape_click, {
+    event <- input$ma_carte_region_click_shape_click
+    if (!is.null(event$id)) {
+      region_name <- regions_shapefile$nom[regions_shapefile$code_insee == event$id]
+      
+      showModal(modalDialog(
+        title = "Région cliquée",
+        paste("Vous avez cliqué sur la région :", region_name)
+      ))
+    }
+  })
+
+  #créer la carte des régions cliquables + L
+  output$ma_carte_region_clickl <- renderLeaflet({
+    leaflet() %>%
+      addTiles() %>%
+      setView(lng = 2.2137, lat = 46.2276, zoom = 5) %>%
+      addPolygons(data = regions_shapefile,
+                  fillColor = "darkblue",
+                  weight = 2,
+                  opacity = 1,
+                  color = "white",
+                  dashArray = "3",
+                  fillOpacity = 0.7,
+                  layerId = ~code_insee) 
+  })
+  
+  observeEvent(input$ma_carte_region_clickl_shape_click, {
+    event <- input$ma_carte_region_clickl_shape_click
+    if (!is.null(event$id)) {
+      region_name <- regions_shapefile$nom[regions_shapefile$code_insee == event$id]  
+      
+      print(region_name)
+      
+ 
+      region_licences <- sum(donnees_federation_aviron$Total[donnees_federation_aviron$Region == region_name], na.rm = TRUE)
+      
+      print(region_licences) 
+      
+      showModal(modalDialog(
+        title = "Région cliquée",
+        paste("Vous avez cliqué sur la région :", region_name),
+        paste("Nombre de licenciés dans cette région :", region_licences)
+      ))
+    }
+  })
+
+  
+  # Créer la carte H/F pour les régions
+  output$ma_carte_region_clickH_F <- renderLeaflet({
+    leaflet() %>%
+      addTiles() %>%
+      setView(lng = 2.2137, lat = 46.2276, zoom = 5) %>%
+      addPolygons(data = regions_shapefile,
+                  fillColor = "blue",
+                  weight = 2,
+                  opacity = 1,
+                  color = "white",
+                  dashArray = "3",
+                  fillOpacity = 0.7,
+                  layerId = ~code_insee)
+  })
+  
+  observeEvent(input$ma_carte_region_clickH_F_shape_click, {
+    event <- input$ma_carte_region_clickH_F_shape_click
+    if (!is.null(event$id)) {
+      region_name <- regions_shapefile$nom[regions_shapefile$code_insee == event$id] 
+      
+      region_total_homme <- sum(donnees_federation_aviron$Total_homme[donnees_federation_aviron$Region == region_name], na.rm = TRUE)
+      region_total_femme <- sum(donnees_federation_aviron$Total_femme[donnees_federation_aviron$Region == region_name], na.rm = TRUE)
+      
+      if (region_total_homme > region_total_femme) {
+        couleur <- "blue"
+      } else {
+        couleur <- "pink"
+      }
+      
+      showModal(modalDialog(
+        title = "Région cliquée",
+        paste("Vous avez cliqué sur la région :", region_name),
+        paste("Nombre d'hommes dans cette région :", region_total_homme),
+        paste("Nombre de femmes dans cette région :", region_total_femme)
+      ))
+      
+      leafletProxy("ma_carte_region_clickH_F") %>%
+        clearShapes() %>%
+        addPolygons(data = regions_shapefile,
+                    fillColor = couleur,
+                    weight = 2,
+                    opacity = 1,
+                    color = "white",
+                    dashArray = "3",
+                    fillOpacity = 0.7,
+                    layerId = ~code_insee)
+    }
+  })}
+
+shinyApp(ui = ui, server = server)
+
+```
+
